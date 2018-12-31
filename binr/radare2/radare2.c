@@ -288,7 +288,7 @@ static RThreadFunctionRet rabin_delegate(RThread *th) {
 			} while (nptr);
 		}
 		//r_core_cmd (&r, cmd, 0);
-		r_str_free (rabin_cmd);
+		free (rabin_cmd);
 		rabin_cmd = NULL;
 	}
 	if (th) {
@@ -906,7 +906,7 @@ int main(int argc, char **argv, char **envp) {
 				} else {
 					r_sign_load (r.anal, complete_path);
 				}
-				r_str_free (complete_path);
+				free (complete_path);
 			}
 		}
 		r_list_free (list);
@@ -934,9 +934,9 @@ int main(int argc, char **argv, char **envp) {
 		eprintf ("^D\n");
 #if __UNIX__
 		// TODO: keep flags :?
-		freopen ("/dev/tty", "rb", stdin);
-		freopen ("/dev/tty","w",stdout);
-		freopen ("/dev/tty","w",stderr);
+		(void)freopen ("/dev/tty", "rb", stdin);
+		(void)freopen ("/dev/tty","w",stdout);
+		(void)freopen ("/dev/tty","w",stderr);
 #else
 		eprintf ("Cannot reopen stdin without UNIX\n");
 		return 1;

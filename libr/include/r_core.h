@@ -71,18 +71,20 @@ R_LIB_VERSION_HEADER(r_core);
 #define R_CORE_CMD_DEPTH 100
 
 /* visual mode */
-#define NPF 10
-#define PIDX (R_ABS (core->printidx % NPF))
-#define R_CORE_VISUAL_MODE_PX    0
-#define R_CORE_VISUAL_MODE_PD    1
-#define R_CORE_VISUAL_MODE_PDDBG 2
-#define R_CORE_VISUAL_MODE_PW    3
+#define R_CORE_VISUAL_MODE_PX  0
+#define R_CORE_VISUAL_MODE_PD  1
+#define R_CORE_VISUAL_MODE_DB  2
+#define R_CORE_VISUAL_MODE_OV  3
+#define R_CORE_VISUAL_MODE_CD  4
+
+/*
 #define R_CORE_VISUAL_MODE_PC    4
 #define R_CORE_VISUAL_MODE_PXA   5
 #define R_CORE_VISUAL_MODE_PSS   6
 #define R_CORE_VISUAL_MODE_PRC   7
 #define R_CORE_VISUAL_MODE_PXa   8
 #define R_CORE_VISUAL_MODE_PXR   9
+*/
 
 typedef struct r_core_rtr_host_t {
 	int proto;
@@ -165,6 +167,17 @@ typedef struct r_core_autocomplete_t {
 typedef struct r_core_visual_tab_t {
 	int printidx;
 	ut64 offset;
+	bool cur_enabled;
+	int cur;
+	int ocur;
+	int cols;
+	int disMode;
+	int hexMode;
+	int printMode;
+	int current3format;
+	int current4format;
+	int current5format;
+	char name[32]; // XXX leak because no  r_core_visual_tab_free
 	// TODO: cursor and such
 } RCoreVisualTab;
 // #define RCoreVisualTab Tab
@@ -649,7 +662,7 @@ R_API void r_core_visual_mounts (RCore *core);
 R_API void r_core_visual_anal (RCore *core, const char *input);
 R_API void r_core_seek_next (RCore *core, const char *type);
 R_API void r_core_seek_previous (RCore *core, const char *type);
-R_API void r_core_visual_define (RCore *core, const char *arg);
+R_API void r_core_visual_define (RCore *core, const char *arg, int distance);
 R_API int r_core_visual_trackflags (RCore *core);
 R_API int r_core_visual_comments (RCore *core);
 R_API int r_core_visual_prompt (RCore *core);

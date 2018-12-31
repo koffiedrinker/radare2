@@ -91,9 +91,8 @@ static int rap__close(RIODesc *fd) {
 	if (RIORAP_IS_VALID (fd)) {
 		if (RIORAP_FD (fd) != NULL) {
 			RIORap *r = fd->data;
-			ret = r_socket_close (r->fd);
+			(void)r_socket_close (r->fd);
 			ret = r_socket_close (r->client);
-			//ret = r_socket_close (r->client);
 			R_FREE (fd->data);
 		}
 	} else {
@@ -350,7 +349,9 @@ static char *rap__system(RIO *io, RIODesc *fd, const char *command) {
 		if (io->cb_printf) {
 			io->cb_printf ("%s", ptr);
 		} else {
-			(void)write (1, ptr, i);
+			if (write (1, ptr, i) != i) {
+				eprintf ("Failed to write\n");
+			}
 		}
 		free (ptr);
 	}

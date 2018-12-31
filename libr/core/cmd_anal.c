@@ -267,11 +267,14 @@ static const char *help_msg_afc[] = {
 	"Usage:", "afc[agl?]", "",
 	"afc", " convention", "Manually set calling convention for current function",
 	"afc", "", "Show Calling convention for the Current function",
+	"afc=", "([cctype])", "Select or show default calling convention",
 	"afcr", "[j]", "Show register usage for the current function",
 	"afca", "", "Analyse function for finding the current calling convention",
 	"afcf", " [name]", "Prints return type function(arg1, arg2...)",
+	"afck", "", "List SDB details of call loaded calling conventions",
 	"afcl", "", "List all available calling conventions",
 	"afco", " path", "Open Calling Convention sdb profile from given path",
+	"afcR", "", "Register telescoping using the calling conventions order",
 	NULL
 };
 
@@ -568,6 +571,7 @@ static const char *help_msg_av[] = {
 	"av*", "", "like av, but as r2 commands",
 	"avr", "[j@addr]", "try to parse RTTI at vtable addr (see anal.cpp.abi)",
 	"avra", "[j]", "search for vtables and try to parse RTTI at each of them",
+	"avrr", "", "recover class info from all findable RTTI (see aC)",
 	"avrD", " [classname]", "demangle a class name from RTTI",
 	NULL
 };
@@ -1849,7 +1853,7 @@ static int anal_fcn_list_bb(RCore *core, const char *input, bool one) {
 
 static bool anal_bb_edge (RCore *core, const char *input) {
 	// "afbe" switch-bb-addr case-bb-addr
-	char *arg = strdup (r_str_trim_ro(input));
+	char *arg = strdup (r_str_trim_ro (input));
 	char *sp = strchr (arg, ' ');
 	if (sp) {
 		*sp++ = 0;
@@ -2461,29 +2465,44 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 		} else if (input[2] == '?') {
 			r_core_cmd_help (core, help_msg_afC);
 		} else {
-			afCc (core, input + 3);
+			afCc (core, r_str_trim_ro (input + 2));
 		}
 		break;
 	case 'c':{ // "afc"
-		RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
-		if (!fcn && !(input[2] == '?'|| input[2] == 'l' || input[2] == 'o' || input[2] == 'f')) {
-			eprintf ("Cannot find function here\n");
-			break;
+		RAnalFunction *fcn = NULL;
+		if (!input[2] || input[2] == ' ' || input[2] == 'r' || input[2] == 'a') {
+			fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+			if (!fcn) {
+				eprintf ("Cannot find function here\n");
+				break;
+			}
 		}
 		switch (input[2]) {
 		case '\0': // "afc"
 			r_cons_println (fcn->cc);
 			break;
 		case ' ': { // "afc "
-			char *cc = r_str_trim (strdup (input + 3));
+			char *argument = strdup (input + 3);
+			char *cc = r_str_trim (argument);
 			if (!r_anal_cc_exist (core->anal, cc)) {
 				eprintf ("Unknown calling convention '%s'\n"
 						"See afcl for available types\n", cc);
 			} else {
 				fcn->cc = r_str_const (r_anal_cc_to_constant (core->anal, cc));
 			}
+			free (argument);
 			break;
 		}
+		case '=': // "afc="
+			if (input[3]) {
+				char *argument = strdup (input + 3);
+				char *cc = r_str_trim (argument);
+				r_core_cmdf (core, "k anal/cc/default.cc=%s", cc);
+				free (argument);
+			} else {
+				r_core_cmd0 (core, "k anal/cc/default.cc");
+			}
+			break;
 		case 'a': // "afca"
 			eprintf ("Todo\n");
 			break;
@@ -2494,12 +2513,15 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 				r_cons_printf ("[");
 			}
 			char *p = strchr (input, ' ');
-			const char *fcn_name = p? r_str_trim (strdup (p)): NULL;
+			const char *fcn_name = p ? r_str_trim (strdup (p)): NULL;
 			char *key = NULL;
 			RListIter *iter;
 			RAnalFuncArg *arg;
-			if (fcn && !fcn_name) {
-				fcn_name = fcn->name;
+			if (!fcn_name) {
+				fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+				if (fcn) {
+					fcn_name = fcn->name;
+				}
 			}
 			if (fcn_name) {
 				key = resolve_fcn_name (core->anal, fcn_name);
@@ -2558,6 +2580,9 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 			}
 			break;
 		}
+		case 'k': // "afck"
+			r_core_cmd0 (core, "k anal/cc/*");
+			break;
 		case 'l': // "afcl" list all function Calling conventions.
 			sdb_foreach (core->anal->sdb_cc, cc_print, NULL);
 			break;
@@ -2636,11 +2661,29 @@ static int cmd_anal_fcn(RCore *core, const char *input) {
 			free (subvec_str);
 			free (json_str);
 		} break;
+		case 'R': { // "afcR"
+			/* very slow, but im tired of waiting for having this, so this is the quickest implementation */
+			int i;
+			char *cc = r_str_trim (r_core_cmd_str (core, "k anal/cc/default.cc"));
+			for (i = 0; i < 8; i++) {
+				char *res = r_core_cmd_strf (core, "k anal/cc/cc.%s.arg%d", cc, i);
+				r_str_trim_nc (res);
+				if (*res) {
+					char *row = r_str_trim (r_core_cmd_strf (core, "drr~%s 0x", res));
+					r_cons_printf ("arg[%d] %s\n", i, row);
+					free (row);
+				}
+				free (res);
+			}
+			free (cc);
+			}
+			break;
 		case '?': // "afc?"
 		default:
 			r_core_cmd_help (core, help_msg_afc);
 		}
-		}break;
+		}
+		break;
 	case 'B': // "afB" // set function bits
 		if (input[2] == ' ') {
 			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset,
@@ -5786,13 +5829,17 @@ static bool cmd_anal_refs(RCore *core, const char *input) {
 			RAnalFunction * fcn = r_anal_get_fcn_in (core->anal, addr, 0);
 			RListIter *iter;
 			RAnalRef *refi;
-			RList *refs = r_anal_fcn_get_refs (core->anal, fcn);
-			r_list_foreach (refs, iter, refi) {
-				RFlagItem *f = r_flag_get_at (core->flags, refi->addr, true);
-				const char *name = f ? f->name: "";
-				r_cons_printf ("%c 0x%08"PFMT64x" 0x%08"PFMT64x" %s\n",
-					refi->type == R_ANAL_REF_TYPE_CALL?'C':'J',
-					refi->at, refi->addr, name);
+			if (fcn) {
+				RList *refs = r_anal_fcn_get_refs (core->anal, fcn);
+				r_list_foreach (refs, iter, refi) {
+					RFlagItem *f = r_flag_get_at (core->flags, refi->addr, true);
+					const char *name = f ? f->name: "";
+					r_cons_printf ("%c 0x%08"PFMT64x" 0x%08"PFMT64x" %s\n",
+						refi->type == R_ANAL_REF_TYPE_CALL?'C':'J',
+						refi->at, refi->addr, name);
+				}
+			} else {
+				eprintf ("Cannot find any function\n");
 			}
 		} else { // "axf"
 			ut8 buf[12];
@@ -5962,8 +6009,14 @@ static void cmd_anal_hint(RCore *core, const char *input) {
 	case 'i': // "ahi"
 		if (input[1] == '?') {
 			r_core_cmd_help (core, help_msg_ahi);
-		} else if (input[1] == ' ') {
-		// You can either specify immbase with letters, or numbers
+		} else if (isdigit (input[1])) {
+			r_anal_hint_set_nword (core->anal, core->offset, input[1] - '0');
+			input++;
+		} else if (input[1] == '-') { // "ahi-"
+			r_anal_hint_set_immbase (core->anal, core->offset, 0);
+		}
+		if (input[1] == ' ') {
+			// You can either specify immbase with letters, or numbers
 			const int base =
 				(input[2] == 's') ? 1 :
 				(input[2] == 'b') ? 2 :
@@ -5975,9 +6028,7 @@ static void cmd_anal_hint(RCore *core, const char *input) {
 				(input[2] == 'S') ? 80 : // syscall
 				(int) r_num_math (core->num, input + 1);
 			r_anal_hint_set_immbase (core->anal, core->offset, base);
-		} else if (input[1] == '-') { // "ahi-"
-			r_anal_hint_set_immbase (core->anal, core->offset, 0);
-		} else {
+		} else if (input[1] != '?' && input[1] != '-') {
 			eprintf ("|ERROR| Usage: ahi [base]\n");
 		}
 		break;
@@ -6426,7 +6477,7 @@ static void cmd_anal_graph(RCore *core, const char *input) {
 			}
 		case 'v': // "agfv"
 			eprintf ("\rRendering graph...");
-			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, 0);
+			RAnalFunction *fcn = r_anal_get_fcn_in (core->anal, core->offset, R_ANAL_FCN_TYPE_ROOT);
 			if (fcn) {
 				r_core_visual_graph (core, NULL, fcn, 1);
 			}
@@ -7511,6 +7562,9 @@ static void cmd_anal_rtti(RCore *core, const char *input) {
 	case 'a': // "avra"
 		r_anal_rtti_print_all (core->anal, input[1]);
 		break;
+	case 'r': // "avrr"
+		r_anal_rtti_recover_all (core->anal);
+		break;
 	case 'D': { // "avrD"
 		char *dup = strdup (input + 1);
 		if (!dup) {
@@ -7543,6 +7597,304 @@ static void cmd_anal_virtual_functions(RCore *core, const char* input) {
 		break;
 	default :
 		r_core_cmd_help (core, help_msg_av);
+		break;
+	}
+}
+
+
+static const char *help_msg_aC[] = {
+		"Usage:", "aC", "anal classes commands",
+		"aCl[lj*]", "", "list all classes",
+		"aC", " [class name]", "add class",
+		"aC-", " [class name]", "delete class",
+		"aCn", " [class name] [new class name]", "rename class",
+		"aCv", " [class name] [addr] ([offset])", "add vtable address to class",
+		"aCv-", " [class name] [vtable id]", "delete vtable by id (from aCv [class name])",
+		"aCb", " [class name]", "list bases of class",
+		"aCb", " [class name] [base class name] ([offset])", "add base class",
+		"aCb-", " [class name] [base class id]", "delete base by id (from aCb [class name])",
+		"aCm", " [class name] [method name] [offset] ([vtable offset])", "add/edit method",
+		"aCm-", " [class name] [method name]", "delete method",
+		"aCmn", " [class name] [method name] [new name]", "rename method",
+		"aC?", "", "show this help",
+		NULL
+};
+
+static void cmd_anal_class_method(RCore *core, const char *input) {
+	RAnalClassErr err = R_ANAL_CLASS_ERR_SUCCESS;
+	char c = input[0];
+	switch (c) {
+	case ' ': // "aCm"
+	case '-': // "aCm-"
+	case 'n': { // "aCmn"
+		const char *str = r_str_trim_ro (input + 1);
+		if (!*str) {
+			eprintf ("No class name given.\n");
+			break;
+		}
+		char *cstr = strdup (str);
+		if (!cstr) {
+			break;
+		}
+		char *end = strchr (cstr, ' ');
+		if (!end) {
+			eprintf ("No method name given.\n");
+			free (cstr);
+			break;
+		}
+		*end = '\0';
+		char *name_str = end + 1;
+
+		if (c == ' ' || c == 'n') {
+			end = strchr (name_str, ' ');
+			if (!end) {
+				if (c == ' ') {
+					eprintf ("No offset given.\n");
+				} else if (c == 'n') {
+					eprintf ("No new method name given.\n");
+				}
+				free (cstr);
+				break;
+			}
+			*end = '\0';
+		}
+
+		if (c == ' ') {
+			char *addr_str = end + 1;
+			end = strchr (addr_str, ' ');
+			if (end) {
+				*end = '\0';
+			}
+
+			RAnalMethod meth;
+			meth.name = name_str;
+			meth.addr = r_num_get (core->num, addr_str);
+			meth.vtable_offset = -1;
+			if (end) {
+				meth.vtable_offset = (int)r_num_get (core->num, end + 1);
+			}
+			err = r_anal_class_method_set (core->anal, cstr, &meth);
+		} else if (c == 'n') {
+			char *new_name_str = end + 1;
+			end = strchr (new_name_str, ' ');
+			if (end) {
+				*end = '\0';
+			}
+
+			err = r_anal_class_method_rename (core->anal, cstr, name_str, new_name_str);
+		} else if (c == '-') {
+			err = r_anal_class_method_delete (core->anal, cstr, name_str);
+		}
+
+		free (cstr);
+		break;
+	}
+	default:
+		r_core_cmd_help (core, help_msg_aC);
+		break;
+	}
+
+	switch (err) {
+		case R_ANAL_CLASS_ERR_NONEXISTENT_CLASS:
+			eprintf ("Class does not exist.\n");
+			break;
+		case R_ANAL_CLASS_ERR_NONEXISTENT_ATTR:
+			eprintf ("Method does not exist.\n");
+			break;
+		default:
+			break;
+	}
+}
+
+static void cmd_anal_class_base(RCore *core, const char *input) {
+	RAnalClassErr err = R_ANAL_CLASS_ERR_SUCCESS;
+	char c = input[0];
+	switch (c) {
+	case ' ': // "aCb"
+	case '-': { // "aCb-"
+		const char *str = r_str_trim_ro (input + 1);
+		if (!*str) {
+			eprintf ("No class name given.\n");
+			return;
+		}
+		char *cstr = strdup (str);
+		if (!cstr) {
+			break;
+		}
+		char *end = strchr (cstr, ' ');
+		if (end) {
+			*end = '\0';
+			end++;
+		}
+
+		if (!end || *end == '\0') {
+			if (c == ' ') {
+				r_anal_class_list_bases (core->anal, cstr);
+			} else /*if (c == '-')*/ {
+				eprintf ("No base id given.\n");
+			}
+			free (cstr);
+			break;
+		}
+
+		char *base_str = end;
+		end = strchr (base_str, ' ');
+		if (end) {
+			*end = '\0';
+		}
+
+		if (c == '-') {
+			err = r_anal_class_base_delete (core->anal, cstr, base_str);
+			free (cstr);
+			break;
+		}
+
+		RAnalBaseClass base;
+		base.id = NULL;
+		base.offset = 0;
+		base.class_name = base_str;
+
+		if (end) {
+			base.offset = r_num_get (core->num, end + 1);
+		}
+
+		err = r_anal_class_base_set (core->anal, cstr, &base);
+		free (base.id);
+		free (cstr);
+		break;
+	}
+	default:
+		r_core_cmd_help (core, help_msg_aC);
+		break;
+	}
+
+	if (err == R_ANAL_CLASS_ERR_NONEXISTENT_CLASS) {
+		eprintf ("Class does not exist.\n");
+	}
+}
+
+static void cmd_anal_class_vtable(RCore *core, const char *input) {
+	RAnalClassErr err = R_ANAL_CLASS_ERR_SUCCESS;
+	char c = input[0];
+	switch (c) {
+	case ' ': // "aCv"
+	case '-': { // "aCv-"
+		const char *str = r_str_trim_ro (input + 1);
+		if (!*str) {
+			eprintf ("No class name given.\n");
+			return;
+		}
+		char *cstr = strdup (str);
+		if (!cstr) {
+			break;
+		}
+		char *end = strchr (cstr, ' ');
+		if (end) {
+			*end = '\0';
+			end++;
+		}
+
+		if (!end || *end == '\0') {
+			if (c == ' ') {
+				r_anal_class_list_vtables (core->anal, cstr);
+			} else /*if (c == '-')*/ {
+				eprintf ("No vtable id given. See aCv [class name].\n");
+			}
+			free (cstr);
+			break;
+		}
+
+		char *arg1_str = end;
+		end = strchr (arg1_str, ' ');
+		if (end) {
+			*end = '\0';
+		}
+
+		if (c == '-') {
+			err = r_anal_class_vtable_delete (core->anal, cstr, arg1_str);
+			free (cstr);
+			break;
+		}
+
+		RAnalVTable vtable;
+		vtable.id = NULL;
+		vtable.addr = r_num_get (core->num, arg1_str);
+		vtable.offset = 0;
+
+		if (end) {
+			vtable.offset = r_num_get (core->num, end + 1);
+		}
+
+		err = r_anal_class_vtable_set (core->anal, cstr, &vtable);
+		free (vtable.id);
+		free (cstr);
+		break;
+	}
+	default:
+		r_core_cmd_help (core, help_msg_aC);
+		break;
+	}
+
+	if (err == R_ANAL_CLASS_ERR_NONEXISTENT_CLASS) {
+		eprintf ("Class does not exist.\n");
+	}
+}
+
+static void cmd_anal_classes(RCore *core, const char *input) {
+	switch (input[0]) {
+	case 'l': // "aCl"
+		r_anal_class_list (core->anal, input[1]);
+		break;
+	case ' ': // "aC"
+	case '-': // "aC-"
+	case 'n': { // "aCn"
+		const char *str = r_str_trim_ro (input + 1);
+		if (!*str) {
+			break;
+		}
+		char *cstr = strdup (str);
+		if (!cstr) {
+			break;
+		}
+		char *end = strchr (cstr, ' ');
+		if (end) {
+			*end = '\0';
+		}
+		if (input[0] == '-') {
+			r_anal_class_delete (core->anal, cstr);
+		} else if(input[0] == 'n') {
+			if (!end) {
+				eprintf ("No new class name given.\n");
+			} else {
+				char *new_name = end + 1;
+				end = strchr (new_name, ' ');
+				if (end) {
+					*end = '\0';
+				}
+				RAnalClassErr err = r_anal_class_rename (core->anal, cstr, new_name);
+				if (err == R_ANAL_CLASS_ERR_NONEXISTENT_CLASS) {
+					eprintf ("Class does not exist.\n");
+				} else if (err == R_ANAL_CLASS_ERR_CLASH) {
+					eprintf ("A class with this name already exists.\n");
+				}
+			}
+		} else {
+			r_anal_class_create (core->anal, cstr);
+		}
+		free (cstr);
+		break;
+	}
+	case 'v':
+		cmd_anal_class_vtable (core, input + 1);
+		break;
+	case 'b': // "aCb"
+		cmd_anal_class_base (core, input + 1);
+		break;
+	case 'm': // "aCm"
+		cmd_anal_class_method (core, input + 1);
+		break;
+	default: // "aC?"
+		r_core_cmd_help (core, help_msg_aC);
 		break;
 	}
 }
@@ -7614,6 +7966,7 @@ static int cmd_anal(void *data, const char *input) {
 		}
 		break;
 	case 'L': return r_core_cmd0 (core, "e asm.arch=??"); break;
+	case 'C': cmd_anal_classes (core, input + 1); break; // "aC"
 	case 'i': cmd_anal_info (core, input + 1); break; // "ai"
 	case 'r': cmd_anal_reg (core, input + 1); break;  // "ar"
 	case 'e': cmd_anal_esil (core, input + 1); break; // "ae"

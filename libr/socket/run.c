@@ -86,7 +86,7 @@ R_API bool r_run_parse(RRunProfile *pf, const char *profile) {
 		return false;
 	}
 	r_str_replace_char (str, '\r',0);
-	for (o = p = str; (o = strchr (p, '\n')); p = o) {
+	for (p = str; (o = strchr (p, '\n')); p = o) {
 		*o++ = 0;
 		r_run_parseline (pf, p);
 	}
@@ -231,7 +231,9 @@ static int parseBool(const char *e) {
 static void setRVA(const char *v) {
 	int fd = open (RVAS, O_WRONLY);
 	if (fd != -1) {
-		write (fd, v, 2);
+		if (write (fd, v, 2) != 2) {
+			eprintf ("Failed to set RVA");
+		}
 		close (fd);
 	}
 }
@@ -384,7 +386,11 @@ static int handle_redirection(const char *cmd, bool in, bool out, bool err) {
 					close (0);
 					return 1;
 				}
-				write (pipes[1], "\n", 1);
+				if (write (pipes[1], "\n", 1) != 1) {
+					eprintf ("[ERROR] rarun2: Cannot write to the pipe\n");
+					close (0);
+					return 1;
+				}
 				close (0);
 				dup2 (pipes[0], 0);
 			} else {

@@ -625,7 +625,7 @@ static Sdb *store_versioninfo_gnu_versym(ELFOBJ *bin, Elf_(Shdr) *shdr, int sz) 
 		return NULL;
 	}
 	Elf_(Shdr) *link_shdr = &bin->shdr[shdr->sh_link];
-	ut8 *edata = (ut8*) calloc (R_MAX (1, num_entries), sizeof (ut16));
+	ut8 *edata = (ut8*) calloc (R_MAX (1, num_entries), 2 * sizeof (ut8));
 	if (!edata) {
 		sdb_free (sdb);
 		return NULL;
@@ -802,7 +802,7 @@ static Sdb *store_versioninfo_gnu_verdef(ELFOBJ *bin, Elf_(Shdr) *shdr, int sz) 
 	if (shdr->sh_size < sizeof (Elf_(Verdef)) || shdr->sh_size < sizeof (Elf_(Verdaux))) {
 		return false;
 	}
-	Elf_(Verdef) *defs = calloc (shdr->sh_size, sizeof (char));
+	Elf_(Verdef) *defs = calloc (shdr->sh_size, 1);
 	if (!defs) {
 		bprintf ("Cannot allocate memory (Check Elf_(Verdef))\n");
 		return false;
@@ -2590,7 +2590,7 @@ static RBinElfSection *get_sections_from_phdr(ELFOBJ *bin) {
 	int i, num_sections = 0;
 	ut64 reldyn = 0, relava = 0, pltgotva = 0, relva = 0;
 	ut64 reldynsz = 0, relasz = 0, pltgotsz = 0;
-	if (!bin || !bin->phdr || !bin->ehdr.e_phnum) {
+	if (!bin || !bin->phdr || !bin->ehdr.e_phnum || !bin->dyn_buf) {
 		return NULL;
 	}
 
@@ -2962,7 +2962,7 @@ static int Elf_(fix_symbols)(ELFOBJ *bin, int nsym, int type, RBinElfSymbol **sy
 			while (!p->last) {
 				if (p->offset && d->offset == p->offset) {
 					p->in_shdr = true;
-					if (*p->name && strcmp (d->name, p->name)) {
+					if (*p->name && *d->name && (r_str_startswith (d->name, p->name) || r_str_startswith (d->name, "$"))) {
 						strcpy (d->name, p->name);
 					}
 				}

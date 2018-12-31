@@ -24,6 +24,8 @@
 // dup from cmd_info
 #define PAIR_WIDTH 9
 
+#define bprintf if (binfile && binfile->rbin && binfile->rbin->verbose) eprintf
+
 static void pair(const char *key, const char *val, int mode, bool last) {
 	if (!val || !*val) {
 		return;
@@ -577,7 +579,7 @@ R_API void r_core_anal_cc_init(RCore *core) {
 	sdb_free (sdbs[0]);
 }
 
-static int bin_info(RCore *r, int mode) {
+static int bin_info(RCore *r, int mode, ut64 laddr) {
 	int i, j, v;
 	char str[R_FLAG_NAME_SIZE];
 	RBinInfo *info = r_bin_get_info (r->bin);
@@ -724,6 +726,7 @@ static int bin_info(RCore *r, int mode) {
 		}
 		pair_str ("guid", info->guid, mode, false);
 		pair_str ("intrp", info->intrp, mode, false);
+		pair_ut64x ("laddr", laddr, mode, false);
 		pair_str ("lang", info->lang, mode, false);
 		pair_bool ("linenum", R_BIN_DBG_LINENUMS & info->dbg_info, mode, false);
 		pair_bool ("lsyms", R_BIN_DBG_SYMS & info->dbg_info, mode, false);
@@ -1013,6 +1016,13 @@ static int srclineCmp(const void *a, const void *b) {
 static int bin_source(RCore *r, int mode) {
 	RList *final_list = r_list_new ();
 	RBinFile * binfile = r->bin->cur;
+
+	if (!binfile) {
+		bprintf ("[Error bin file]\n");
+		r_list_free (final_list);
+		return false;
+	}
+
 	SdbListIter *iter;
 	RListIter *iter2;
 	char* srcline;
@@ -1172,12 +1182,7 @@ static int bin_entry(RCore *r, int mode, ut64 laddr, int va, bool inifin) {
 			r_cons_printf ("s %s\n", name);
 			free (name);
 		} else {
-			r_cons_printf (
-				 "vaddr=0x%08"PFMT64x
-				" paddr=0x%08"PFMT64x
-				" baddr=0x%08"PFMT64x
-				" laddr=0x%08"PFMT64x,
-				at, paddr, baddr, laddr);
+			r_cons_printf ("vaddr=0x%08"PFMT64x" paddr=0x%08"PFMT64x, at, paddr);
 			if (is_initfini (entry) && hvaddr != UT64_MAX) {
 				r_cons_printf (" hvaddr=0x%08"PFMT64x, hvaddr);
 			}
@@ -1892,16 +1897,20 @@ static int bin_symbols(RCore *r, int mode, ut64 laddr, int va, ut64 at, const ch
 		SymName sn = {0};
 
 		if (exponly && !isAnExport (symbol)) {
+			free (r_symbol_name);
 			continue;
 		}
 		if (name && strcmp (r_symbol_name, name)) {
+			free (r_symbol_name);
 			continue;
 		}
 		if (at && (!symbol->size || !is_in_range (at, addr, symbol->size))) {
+			free (r_symbol_name);
 			continue;
 		}
 		if ((printHere && !is_in_range (r->offset, symbol->paddr, len))
 				&& (printHere && !is_in_range (r->offset, addr, len))) {
+			free (r_symbol_name);
 			continue;
 		}
 		snInit (r, &sn, symbol, lang);
@@ -2336,7 +2345,26 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 		if (section->perm & R_PERM_X) {
 			perms[3] = 'x';
 		}
-
+		const char *arch = NULL;
+		int bits = 0;
+		if (section->arch || section->bits) {
+			arch = section->arch;
+			bits = section->bits;
+		}
+		if (info) {
+			if (!arch) {
+				arch = info->arch;
+			}
+			if (!bits) {
+				bits = info->bits;
+			}
+		}
+		if (!arch) {
+			arch = r_config_get (r->config, "asm.arch");
+		}
+		if (!bits) {
+			bits = R_SYS_BITS;
+		}
 		if (IS_MODE_SET (mode)) {
 #if LOAD_BSS_MALLOC
 			if (!strcmp (section->name, ".bss")) {
@@ -2371,18 +2399,6 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 			r_flag_set (r->flags, str, addr, size);
 			R_FREE (str);
 
-			if (section->arch || section->bits) {
-				const char *arch = section->arch;
-				int bits = section->bits;
-				if (info) {
-					if (!arch) {
-						arch = info->arch;
-					}
-					if (!bits) {
-						bits = info->bits;
-					}
-				}
-			}
 			if (!section->is_segment || segments_only) {
 				char *pfx = r->bin->prefix;
 				str = r_str_newf ("[%02d] %s %s size %" PFMT64d" named %s%s%s",
@@ -2469,17 +2485,6 @@ static int bin_sections(RCore *r, int mode, ut64 laddr, int va, ut64 at, const c
 				free (data);
 			}
 			if (section->arch || section->bits) {
-				const char *arch = section->arch;
-				int bits = section->bits;
-				if (!arch && info) {
-					arch = info->arch;
-					if (!arch) {
-						arch = r_config_get (r->config, "asm.arch");
-					}
-				}
-				if (!bits) {
-					bits = info? info->bits: R_SYS_BITS;
-				}
 				snprintf (str, sizeof (str), "arch=%s bits=%d ",
 					r_str_get2 (arch), bits);
 			} else {
@@ -3355,9 +3360,6 @@ R_API void r_core_bin_export_info_rad(RCore *core) {
 		return;
 	}
 	db = sdb_ns (bf->sdb, "info", 0);;
-	if (!db) {
-		return;
-	}
 	if (db) {
 		SdbListIter *iter;
 		SdbKv *kv;
@@ -3460,7 +3462,7 @@ R_API int r_core_bin_info(RCore *core, int action, int mode, int va, RCoreBinFil
 		ret &= bin_raw_strings (core, mode, va);
 	}
 	if ((action & R_CORE_BIN_ACC_INFO)) {
-		ret &= bin_info (core, mode);
+		ret &= bin_info (core, mode, loadaddr);
 	}
 	if ((action & R_CORE_BIN_ACC_MAIN)) {
 		ret &= bin_main (core, mode, va);

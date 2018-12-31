@@ -481,6 +481,7 @@ typedef struct r_cons_t {
 	int break_word_len;
 	ut64 timeout;
 	bool grep_color;
+	bool grep_highlight;
 	bool use_tts;
 	bool filter;
 	char* (*rgbstr)(char *str, size_t sz, ut64 addr);
@@ -796,6 +797,7 @@ R_API char *r_cons_hud_string(const char *s);
 R_API char *r_cons_hud_file(const char *f);
 
 R_API const char *r_cons_get_buffer(void);
+R_API int r_cons_get_buffer_len();
 R_API void r_cons_grep_help(void);
 R_API void r_cons_grep_parsecmd(char *cmd, const char *quotestr);
 R_API char * r_cons_grep_strip(char *cmd, const char *quotestr);
@@ -1046,6 +1048,7 @@ typedef struct r_panels_menu_t {
 
 typedef enum {
 	PANEL_MODE_DEFAULT,
+	PANEL_MODE_MENU,
 	PANEL_MODE_ZOOM,
 	PANEL_MODE_WINDOW,
 	PANEL_MODE_HELP
@@ -1071,7 +1074,6 @@ typedef struct r_panels_t {
 	RPanel *panel;
 	int n_panels;
 	int columnWidth;
-	int menu_pos;
 	int curnode;
 	bool isResizing;
 	RPanelsMenu *panelsMenu;

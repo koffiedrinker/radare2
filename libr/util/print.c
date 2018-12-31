@@ -388,7 +388,7 @@ R_API void r_print_addr(RPrint *p, ut64 addr) {
 	char space[32] = {
 		0
 	};
-	const char *white;
+	const char *white = "";
 #define PREOFF(x) (p && p->cons && p->cons->pal.x)? p->cons->pal.x
 	PrintfCallback printfmt = (PrintfCallback) (p? p->cb_printf: libc_printf);
 	bool use_segoff = p? (p->flags & R_PRINT_FLAGS_SEGOFF): false;
@@ -434,20 +434,30 @@ R_API void r_print_addr(RPrint *p, ut64 addr) {
 			if (p->flags & R_PRINT_FLAGS_RAINBOW) {
 				// pre = r_cons_rgb_str_off (rgbstr, addr);
 				if (p && p->cons && p->cons->rgbstr) {
-					char rgbstr[32];
+					static char rgbstr[32];
 					pre = p->cons->rgbstr (rgbstr, sizeof (rgbstr), addr);
 				}
 			}
 			if (dec) {
 				printfmt ("%s%s%" PFMT64d "%s%c", pre, white, addr, fin, ch);
 			} else {
-				printfmt ("%s0x%08" PFMT64x "%s%c", pre, addr, fin, ch);
+				if (p->wide_offsets) {
+					// TODO: make %016 depend on asm.bits
+					printfmt ("%s0x%016" PFMT64x "%s%c", pre, addr, fin, ch);
+				} else {
+					printfmt ("%s0x%08" PFMT64x "%s%c", pre, addr, fin, ch);
+				}
 			}
 		} else {
 			if (dec) {
 				printfmt ("%s%" PFMT64d "%c", white, addr, ch);
 			} else {
-				printfmt ("0x%08" PFMT64x "%c", addr, ch);
+				if (p->wide_offsets) {
+					// TODO: make %016 depend on asm.bits
+					printfmt ("0x%016" PFMT64x "%c", addr, ch);
+				} else {
+					printfmt ("0x%08" PFMT64x "%c", addr, ch);
+				}
 			}
 		}
 	}
@@ -748,8 +758,8 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 	int stride = 0;
 	int col = 0; // selected column (0=none, 1=hex, 2=ascii)
 	int use_sparse = 0;
-	int use_header = 1;
-	int use_hdroff = 1;
+	bool use_header = true;
+	bool use_hdroff = true;
 	int use_pair = 1;
 	int use_offset = 1;
 	bool compact = false;
@@ -774,7 +784,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 		hex_style = p->flags & R_PRINT_FLAGS_STYLE;
 		use_hexa = !(p->flags & R_PRINT_FLAGS_NONHEX);
 		compact = p->flags & R_PRINT_FLAGS_COMPACT;
-		inc = p->cols;
+		inc = p->cols; // row width
 		col = p->col;
 		printfmt = (PrintfCallback) p->cb_printf;
 		stride = p->stride;
@@ -829,7 +839,6 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 		}
 		break;
 	}
-
 	const char *space = hex_style? ".": " ";
 	// TODO: Use base to change %03o and so on
 	if (step == 1 && base < 0) {
@@ -848,6 +857,9 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 					printfmt ("..offset..");
 				} else {
 					printfmt ("- offset -");
+					if (p->wide_offsets) {
+						printfmt ("       ");
+					}
 				}
 				if (use_segoff) {
 					ut32 s, a;
@@ -908,8 +920,10 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 			} else {
 				printfmt (col == 2? "|": space);
 			}
-			for (i = 0; i < inc; i++) {
-				printfmt ("%c", hex[(i + k) % 16]);
+			if (!p || !(p->flags & R_PRINT_FLAGS_NONASCII)) {
+				for (i = 0; i < inc; i++) {
+					printfmt ("%c", hex[(i + k) % 16]);
+				}
 			}
 			if (col == 2) {
 				printfmt ("|");
@@ -936,6 +950,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 	}
 	// is this necessary?
 	r_print_set_screenbounds (p, addr);
+	int rows = 0;
 	for (i = j = 0; i < len; i += (stride? stride: inc), j += (stride? stride: 0)) {
 		if (p && p->cons && p->cons->context && p->cons->context->breaked) {
 			break;
@@ -1062,7 +1077,12 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 						break;
 					}
 					r_print_byte (p, bytefmt, j, buf[j]);
-					if (j % 2 || !pairs) {
+					if (pairs && !compact && (inc & 1)) {
+						bool mustspace = (rows % 2) ? !(j&1) : (j&1);
+						if (mustspace) {
+							printfmt (" ");
+						}
+					} else if (j % 2 || !pairs) {
 						if (col == 1) {
 							if (j + 1 < inc + i) {
 								if (!compact) {
@@ -1094,11 +1114,13 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 		} else {
 			printfmt ((col == 2)? "|": " ");
 		}
-		for (j = i; j < i + inc; j++) {
-			if (j >= len) {
-				break;
+		if (!p || !(p->flags & R_PRINT_FLAGS_NONASCII)) {
+			for (j = i; j < i + inc; j++) {
+				if (j >= len) {
+					break;
+				}
+				r_print_byte (p, "%c", j, buf[j]);
 			}
-			r_print_byte (p, "%c", j, buf[j]);
 		}
 		/* ascii column */
 		if (col == 2) {
@@ -1130,7 +1152,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 			for (j = i; j < i + inc; j++) {
 				if (p && p->offname) {
 					a = p->offname (p->user, addr + j);
-					if (a && *a) {
+					if (p->colorfor && a && *a) {
 						const char *color = p->colorfor (p->user, addr + j, true);
 						printfmt ("%s  ; %s"Color_RESET, color?color: "", a);
 					}
@@ -1153,6 +1175,7 @@ R_API void r_print_hexdump(RPrint *p, ut64 addr, const ut8 *buf, int len, int ba
 			}
 		}
 		printfmt ("\n");
+		rows++;
 
 		if (p && p->cfmt && *p->cfmt) {
 			if (row_have_cursor != -1) {
@@ -2040,6 +2063,9 @@ R_API void r_print_hex_from_bin (RPrint *p, char *bin_str) {
 	int i, j, index;
 	RPrint myp = {.cb_printf = libc_printf};
 	const int len = strlen (bin_str);
+	if (!len) {
+		return;
+	}
 	ut64 n, *buf = malloc (sizeof (ut64) * ((len + 63) / 64));
 	if (buf == NULL) {
 		eprintf ("allocation failed\n");

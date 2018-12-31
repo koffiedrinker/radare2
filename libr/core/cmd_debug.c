@@ -2597,13 +2597,12 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 			return;
 		}
 
-		int size = atoi (str + 1);
+		size = atoi (str + 1);
 		if (size) {
 			r_debug_reg_list (core->dbg, R_REG_TYPE_GPR, size, str[0], use_color);
 		} else {
 			char *comma = strchr (str + 1, ',');
 			if (comma) {
-				size = 32; // non-zero
 				char *args = strdup (str + 1);
 				char argc = r_str_split (args, ',');
 				for (i = 0; i < argc; i++) {
@@ -2611,7 +2610,7 @@ static void cmd_debug_reg(RCore *core, const char *str) {
 				}
 				free (args);
 			} else {
-				size = showreg (core, str + 1);
+				showreg (core, str + 1);
 			}
 		}
 	}
@@ -3177,6 +3176,9 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 			module = strtok (string, " ");
 			delta = (ut64)r_num_math (core->num, strtok (NULL, ""));
 			bpi = r_debug_bp_add (core->dbg, 0, hwbp, false, 0, module, delta);
+			if (!bpi) {
+				eprintf ("Cannot set breakpoint.\n");
+			}
 			free (string);
 		}
 		break;
@@ -3260,7 +3262,9 @@ static void r_core_cmd_bp(RCore *core, const char *input) {
 		} else {
 			// XXX(jjd): does t his need an address validity check??
 			bpi = r_debug_bp_add (core->dbg, addr, hwbp, false, 0, NULL, 0);
-			if (!bpi) eprintf ("Cannot set breakpoint (%s)\n", input + 2);
+			if (!bpi) {
+				eprintf ("Cannot set breakpoint (%s)\n", input + 2);
+			}
 		}
 		r_bp_enable (core->dbg->bp, r_num_math (core->num, input + 2), true, 0);
 		break;

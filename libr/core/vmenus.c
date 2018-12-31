@@ -1527,23 +1527,21 @@ R_API int r_core_visual_comments (RCore *core) {
 	char *str;
 	char cmd[512], *p = NULL;
 	int ch, option = 0;
-	int format = 0, found = 0;
+	int format = 0, i = 0;
 	ut64 addr, from = 0, size = 0;
 
 	for (;;) {
 		r_cons_clear00 ();
 		r_cons_strcat ("Comments:\n");
-		found = 0;
 		RList *items = r_list_newf (free);
 		RAnalMetaItem *item;
 		RListIter *iter;
 		r_meta_list_cb (core->anal, R_META_TYPE_COMMENT, 0, meta_enumerate_cb, items, UT64_MAX);
-		int i = 0;
+		i = 0;
 		r_list_foreach (items, iter, item) {
 			str = item->str;
 			addr = item->from;
 			if (option==i) {
-				found = 1;
 				from = addr;
 				size = 1; // XXX: remove this thing size for comments is useless d->size;
 				free (p);
@@ -1554,9 +1552,8 @@ R_API int r_core_visual_comments (RCore *core) {
 				free (str);
 			}
 			i ++;
-			found = true;
 		}
-		if (!found) {
+		if (!i) {
 			if (--option < 0) {
 				r_cons_any_key ("No comments");
 				break;
@@ -2851,7 +2848,7 @@ static void handleHints(RCore *core) {
 	}
 }
 
-R_API void r_core_visual_define (RCore *core, const char *args) {
+R_API void r_core_visual_define(RCore *core, const char *args, int distance) {
 	int plen = core->blocksize;
 	ut64 off = core->offset;
 	int i, h = 0, n, ch, ntotal = 0;
@@ -2890,7 +2887,8 @@ R_API void r_core_visual_define (RCore *core, const char *args) {
 		," e    end of function"
 		," f    analyze function"
 		," F    format"
-		," i    immediate base (b(in), o(ct), d(ec), h(ex), s(tr))"
+		," i    (ahi) immediate base (b(in), o(ct), d(ec), h(ex), s(tr))"
+		," I    (ahi1) immediate base (b(in), o(ct), d(ec), h(ex), s(tr))"
 		," j    merge down (join this and next functions)"
 		," k    merge up (join this and previous function)"
 		," h    define anal hint"
@@ -2913,6 +2911,7 @@ R_API void r_core_visual_define (RCore *core, const char *args) {
 		r_cons_printf ("\r%s\n", lines[i]);
 	}
 	r_cons_flush ();
+	int wordsize = 0;
 	// get ESC+char, return 'hjkl' char
 repeat:
 	if (*args) {
@@ -2922,6 +2921,8 @@ repeat:
 		ch = r_cons_arrow_to_hjkl (r_cons_readchar ());
 	}
 
+onemoretime:
+	wordsize = 4;
 	switch (ch) {
 	case 'F':
 		{
@@ -2954,29 +2955,43 @@ repeat:
 			}
 		}
 		break;
+	case 'I':
+		{
+			char str[128];
+			r_cons_show_cursor (true);
+			r_line_set_prompt ("immbase: ");
+			if (r_cons_fgets (str, sizeof (str), 0, NULL) > 0) {
+				r_core_cmdf (core, "ahi1 %s @ 0x%"PFMT64x, str, off);
+			}
+		}
+		break;
 	case 'b':
 		if (plen != core->blocksize) {
 			rep = plen / 2;
 		}
 		define_data_ntimes (core, off, rep, R_BYTE_DATA);
+		wordsize = 1;
 		break;
 	case 'B':
 		if (plen != core->blocksize) {
 			rep = plen;
 		}
 		define_data_ntimes (core, off, rep, R_WORD_DATA);
+		wordsize = 2;
 		break;
 	case 'w':
 		if (plen != core->blocksize) {
 			rep = plen / 4;
 		}
 		define_data_ntimes (core, off, rep, R_DWORD_DATA);
+		wordsize = 4;
 		break;
 	case 'W':
 		if (plen != core->blocksize) {
 			rep = plen / 8;
 		}
 		define_data_ntimes (core, off, rep, R_QWORD_DATA);
+		wordsize = 8;
 		break;
 	case 'm':
 		{
@@ -3188,6 +3203,7 @@ repeat:
 				ntotal += n;
 			}
 		} while (ntotal < plen);
+		wordsize = ntotal;
 		}
 		break;
 	case 's':
@@ -3231,6 +3247,7 @@ repeat:
 		}
 		r_name_filter (name, n + 10);
 		r_flag_set (core->flags, name, off, n);
+		wordsize = n;
 		free (name);
 		}
 		break;
@@ -3239,8 +3256,8 @@ repeat:
 		r_meta_add (core->anal, R_META_TYPE_DATA, off, off+plen, "");
 		break;
 	case 'c': // TODO: check
-		r_meta_cleanup (core->anal, off, off+plen);
-		r_meta_add (core->anal, R_META_TYPE_CODE, off, off+plen, "");
+		r_meta_cleanup (core->anal, off, off + plen);
+		r_meta_add (core->anal, R_META_TYPE_CODE, off, off + plen, "");
 		break;
 	case 'u':
 		r_core_anal_undefine (core, off);
@@ -3349,6 +3366,11 @@ repeat:
 			goto repeat;
 		}
 		break;
+	}
+	if (distance > 0) {
+		distance--;
+		off += wordsize;
+		goto onemoretime;
 	}
 }
 

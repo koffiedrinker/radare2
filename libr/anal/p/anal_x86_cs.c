@@ -1356,7 +1356,7 @@ static void anop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 			// We use $b rather than $c here as the carry flag really
 			// represents a "borrow"
 			esilprintf (op, "%s,%s,$o,of,=,$s,sf,=,$z,zf,=,$p,pf,=,$b%d,cf,=",
-				src, dst, size);
+				src, dst, (size*8));
 		}
 		break;
 	case X86_INS_SBB:
@@ -1365,7 +1365,7 @@ static void anop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 			src = getarg (&gop, 1, 0, NULL, SRC_AR);
 			dst = getarg (&gop, 0, 0, NULL, DST_AR);
 			ut64 size = INSOP(0).size;
-			esilprintf (op, "cf,%s,+,%s,-=,$o,of,=,$s,sf,=,$z,zf,=,$p,pf,=,$b%d,cf,=", src, dst, size);
+			esilprintf (op, "cf,%s,+,%s,-=,$o,of,=,$s,sf,=,$z,zf,=,$p,pf,=,$b%d,cf,=", src, dst, (size*8));
 		}
 		break;
 	case X86_INS_LIDT:
@@ -1693,8 +1693,8 @@ static void anop_esil(RAnal *a, RAnalOp *op, ut64 addr, const ut8 *buf, int len,
 			case X86_INS_BTS:
 			case X86_INS_BTC:
 				r_strbuf_appendf (&op->esil, ",%d,%s,%%,1,<<,%d,%s,/,%s,+,%c=[%d]",
-						width * 8, src, width * 8, src, dst_r, width,
-						(insn->id == X86_INS_BTS)?'|':'^');
+						width * 8, src, width * 8, src, dst_r,
+						(insn->id == X86_INS_BTS)?'|':'^', width);
 				break;
 			case X86_INS_BTR:
 				dst_w = getarg (&gop, 0, 1, "&", DST_R_AR);

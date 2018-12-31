@@ -134,7 +134,6 @@ static char *is_string_at(RCore *core, ut64 addr, int *olen) {
 	if (lowptr >> 32) { // must be pa mode only
 		lowptr &= UT32_MAX;
 	}
-	// eprintf ("PTR %llx [ %llx %llx %llx ]\n", addr, cstr[0], cstr[1], cstr[2]);
 	// cstring
 	if (cstr[0] == 0 && cstr[1] < 0x1000) {
 		ut64 ptr = cstr[2];
@@ -384,12 +383,12 @@ static char *anal_fcn_autoname(RCore *core, RAnalFunction *fcn, int dump) {
 		return strdup ("parse_args"); // main?
 	}
 	if (use_isatty) {
-		char *ret = r_str_newf ("sub.setup_tty_%s_%x", do_call, fcn->addr & 0xfff);
+		char *ret = r_str_newf ("sub.setup_tty_%s_%"PFMT64x, do_call, fcn->addr);
 		free (do_call);
 		return ret;
 	}
 	if (do_call) {
-		char *ret = r_str_newf ("sub.%s_%x", do_call, fcn->addr & 0xfff);
+		char *ret = r_str_newf ("sub.%s_%"PFMT64x, do_call, fcn->addr);
 		free (do_call);
 		return ret;
 	}
@@ -776,8 +775,7 @@ static int core_anal_fcn(RCore *core, ut64 at, ut64 from, int reftype, int depth
 						if (!f->fcn_locs) {
 							f->fcn_locs = r_list_new ();
 						}
-						r_list_append (f->fcn_locs, fcn);
-						r_list_sort (f->fcn_locs, &cmpfcn);
+						r_list_add_sorted (f->fcn_locs, fcn, &cmpfcn);
 					}
 				}
 				r_anal_xrefs_set (core->anal, from, fcn->addr, reftype);
@@ -1888,14 +1886,16 @@ R_API void r_core_anal_codexrefs(RCore *core, ut64 addr) {
 	free (me);
 }
 
+static int RAnalRef_cmp(const RAnalRef* ref1, const RAnalRef* ref2) {
+	return ref1->addr != ref2->addr;
+}
+
 R_API void r_core_anal_callgraph(RCore *core, ut64 addr, int fmt) {
-	RAnalFunction fakefr = R_EMPTY;
 	const char *font = r_config_get (core->config, "graph.font");
 	int is_html = r_cons_singleton ()->is_html;
 	bool refgraph = r_config_get_i (core->config, "graph.refs");
-	int first, first2, showhdr = 0;
+	int first, first2;
 	RListIter *iter, *iter2;
-	const int hideempty = 1;
 	int usenames = r_config_get_i (core->config, "graph.json.usenames");;
 	RAnalFunction *fcni;
 	RAnalRef *fcnr;
@@ -1903,14 +1903,43 @@ R_API void r_core_anal_callgraph(RCore *core, ut64 addr, int fmt) {
 	ut64 from = r_config_get_i (core->config, "graph.from");
 	ut64 to = r_config_get_i (core->config, "graph.to");
 
-	if (fmt == R_GRAPH_FORMAT_JSON) {
+	switch (fmt)
+	{
+	case R_GRAPH_FORMAT_JSON:
 		r_cons_printf ("[");
-	}
-	if (fmt == R_GRAPH_FORMAT_GML || fmt == R_GRAPH_FORMAT_GMLFCN) {
+		break;
+	case R_GRAPH_FORMAT_GML:
+	case R_GRAPH_FORMAT_GMLFCN:
 		r_cons_printf ("graph\n[\n"
 				"hierarchic  1\n"
 				"label  \"\"\n"
 				"directed  1\n");
+		break;
+	case R_GRAPH_FORMAT_DOT:
+		if (!is_html) {
+			const char * gv_edge = r_config_get (core->config, "graph.gv.edge");
+			const char * gv_node = r_config_get (core->config, "graph.gv.node");
+			const char * gv_grph = r_config_get (core->config, "graph.gv.graph");
+			const char * gv_spline = r_config_get (core->config, "graph.gv.spline");
+			if (!gv_edge || !*gv_edge) {
+				gv_edge = "arrowhead=\"normal\"";
+			}
+			if (!gv_node || !*gv_node) {
+				gv_node = "fillcolor=gray style=filled shape=box";
+			}
+			if (!gv_grph || !*gv_grph) {
+				gv_grph = "bgcolor=white";
+			}
+			if (!gv_spline || !*gv_spline) {
+				gv_spline = "splines=\"ortho\"";
+			}
+			r_cons_printf ("digraph code {\n"
+					"graph [%s fontname=\"%s\" %s];\n"
+					"node [%s];\n"
+					"edge [%s];\n", gv_grph, font, gv_spline,
+					gv_node, gv_edge);
+		}
+		break;
 	}
 	first = 0;
 	ut64 base = UT64_MAX;
@@ -1930,9 +1959,24 @@ repeat:
 			continue;
 		}
 		RList *refs = r_anal_fcn_get_refs (core->anal, fcni);
-		if (!fmt) {
+		RList *calls = r_list_new ();
+		// TODO: maybe fcni->calls instead ?
+		r_list_foreach (refs, iter2, fcnr) {
+			if (fcnr->type == 'C' && r_list_find(calls, fcnr, (RListComparator)RAnalRef_cmp) == NULL) {
+				r_list_append (calls, fcnr);
+			}
+		}
+		if (r_list_empty(calls)) {
+			r_list_free (refs);
+			r_list_free (calls);
+			continue;
+		}
+		switch (fmt) {
+		case R_GRAPH_FORMAT_NO:
 			r_cons_printf ("0x%08"PFMT64x"\n", fcni->addr);
-		} else if (fmt == R_GRAPH_FORMAT_GML || fmt == R_GRAPH_FORMAT_GMLFCN) {
+			break;
+		case R_GRAPH_FORMAT_GML:
+		case R_GRAPH_FORMAT_GMLFCN: {
 			RFlagItem *flag = r_flag_get_i (core->flags, fcni->addr);
 			if (iteration == 0) {
 				char *msg = flag? strdup (flag->name): r_str_newf ("0x%08"PFMT64x, fcni->addr);
@@ -1942,129 +1986,93 @@ repeat:
 						"  ]\n", fcni->addr - base, msg);
 				free (msg);
 			}
-		} else if (fmt == R_GRAPH_FORMAT_JSON) {
-			if (hideempty && !r_list_length (refs)) {
-				r_list_free (refs);
-				continue;
-			}
+			break;
+		}
+		case R_GRAPH_FORMAT_JSON:
 			if (usenames) {
-				r_cons_printf (
-					"%s{\"name\":\"%s\", "
-					"\"size\":%d,\"imports\":[",
-					first ? "," : "", fcni->name,
-					r_anal_fcn_size (fcni));
+				r_cons_printf ("%s{\"name\":\"%s\", "
+						"\"size\":%d,\"imports\":[",
+						first ? "," : "", fcni->name,
+						r_anal_fcn_size (fcni));
 			} else {
 				r_cons_printf ("%s{\"name\":\"0x%08" PFMT64x
-					       "\", \"size\":%d,\"imports\":[",
-					       first ? "," : "", fcni->addr,
-					       r_anal_fcn_size (fcni));
+						"\", \"size\":%d,\"imports\":[",
+						first ? "," : "", fcni->addr,
+						r_anal_fcn_size (fcni));
 			}
 			first = 1;
+			break;
+		case R_GRAPH_FORMAT_DOT:
+			r_cons_printf ("  \"0x%08"PFMT64x"\" "
+					"[label=\"%s\""
+					" URL=\"%s/0x%08"PFMT64x"\"];\n",
+					fcni->addr, fcni->name,
+					fcni->name, fcni->addr);
 		}
 		first2 = 0;
-		// TODO: maybe fcni->calls instead ?
-		r_list_foreach (refs, iter2, fcnr) {
-			if (fcnr->type != 'C') {
-				continue;
-			}
-			RAnalFunction *fr = r_anal_get_fcn_in (core->anal, fcnr->addr, 0);
-			if (!fr) {
-				fr = &fakefr;
-				if (fr) {
-					free (fr->name);
-					fr->name = r_str_newf ("unk.0x%"PFMT64x, fcnr->addr);
-				}
-			}
-			if (!is_html && !showhdr) {
-				if (fmt == R_GRAPH_FORMAT_DOT) {
-					const char * gv_edge = r_config_get (core->config, "graph.gv.edge");
-					const char * gv_node = r_config_get (core->config, "graph.gv.node");
-					const char * gv_grph = r_config_get (core->config, "graph.gv.graph");
-					const char * gv_spline = r_config_get (core->config, "graph.gv.spline");
-					if (!gv_edge || !*gv_edge) {
-						gv_edge = "arrowhead=\"normal\"";
-					}
-					if (!gv_node || !*gv_node) {
-						gv_node = "fillcolor=gray style=filled shape=box";
-					}
-					if (!gv_grph || !*gv_grph) {
-						gv_grph = "bgcolor=white";
-					}
-					if (!gv_spline || !*gv_spline) {
-						gv_spline = "splines=\"ortho\"";
-					}
-					r_cons_printf ("digraph code {\n"
-							"graph [%s fontname=\"%s\" %s];\n"
-							"node [%s];\n"
-							"edge [%s];\n", gv_grph, font, gv_spline,
-							gv_node, gv_edge);
-				}
-				showhdr = 1;
-			}
+		r_list_foreach (calls, iter2, fcnr) {
 			// TODO: display only code or data refs?
 			RFlagItem *flag = r_flag_get_i (core->flags, fcnr->addr);
-			if (fmt == R_GRAPH_FORMAT_GML || fmt == R_GRAPH_FORMAT_GMLFCN) {
+			char *fcnr_name = (flag && flag->name) ? flag->name : r_str_newf ("unk.0x%"PFMT64x, fcnr->addr);
+			switch(fmt)
+			{
+			case R_GRAPH_FORMAT_GMLFCN:
 				if (iteration == 0) {
-					if (fmt == R_GRAPH_FORMAT_GMLFCN) {
-						char *msg = flag? strdup (flag->name): r_str_newf ("0x%08"PFMT64x, fcnr->addr);
-						r_cons_printf ("  node [\n"
-								"    id  %"PFMT64d"\n"
-								"    label  \"%s\"\n"
-								"  ]\n", fcnr->addr - base, msg
-							      );
-						r_cons_printf ("  edge [\n"
-								"    source  %"PFMT64d"\n"
-								"    target  %"PFMT64d"\n"
-								"  ]\n", fcni->addr-base, fcnr->addr-base
-							      );
-						free (msg);
-					}
-				} else {
+					r_cons_printf ("  node [\n"
+							"    id  %"PFMT64d"\n"
+							"    label  \"%s\"\n"
+							"  ]\n", fcnr->addr - base, fcnr_name);
 					r_cons_printf ("  edge [\n"
 							"    source  %"PFMT64d"\n"
 							"    target  %"PFMT64d"\n"
-							"  ]\n", fcni->addr-base, fcnr->addr-base //, "#000000"
-						      );
+							"  ]\n", fcni->addr-base, fcnr->addr-base);
 				}
-			} else if (fmt == R_GRAPH_FORMAT_DOT) {
-				if (flag && flag->name) {
-					r_cons_printf ("  \"0x%08"PFMT64x"\" -> \"0x%08"PFMT64x"\" "
-							"[label=\"%s\" color=\"%s\" URL=\"%s/0x%08"PFMT64x"\"];\n",
-							fcni->addr, fcnr->addr, flag->name,
-							(fcnr->type==R_ANAL_REF_TYPE_CODE ||
-							 fcnr->type==R_ANAL_REF_TYPE_CALL)?"green":"red",
-							flag->name, fcnr->addr);
-					r_cons_printf ("  \"0x%08"PFMT64x"\" "
-							"[label=\"%s\""
-							" URL=\"%s/0x%08"PFMT64x"\"];\n",
-							fcnr->addr, flag->name,
-							flag->name, fcnr->addr);
+			case R_GRAPH_FORMAT_GML:
+				if (iteration != 0) {
+					r_cons_printf ("  edge [\n"
+							"    source  %"PFMT64d"\n"
+							"    target  %"PFMT64d"\n"
+							"  ]\n", fcni->addr-base, fcnr->addr-base); //, "#000000"
 				}
-			} else if (fmt == R_GRAPH_FORMAT_JSON) {
-				if (fr) {
-					RList *refs1 = r_anal_fcn_get_refs (core->anal, fr);
-					if (!hideempty || (hideempty && r_list_length (refs1) > 0)) {
-						if (usenames) {
-							r_cons_printf ("%s\"%s\"", first2?",":"", fr->name);
-						} else {
-							r_cons_printf ("%s\"0x%08"PFMT64x"\"", first2?",":"", fr->addr);
-						}
-						first2 = 1;
-					}
-					r_list_free (refs1);
+				break;
+			case R_GRAPH_FORMAT_DOT:
+				r_cons_printf ("  \"0x%08"PFMT64x"\" -> \"0x%08"PFMT64x"\" "
+						"[label=\"%s\" color=\"%s\" URL=\"%s/0x%08"PFMT64x"\"];\n",
+						fcni->addr, fcnr->addr, fcnr_name,
+						(fcnr->type==R_ANAL_REF_TYPE_CODE ||
+							fcnr->type==R_ANAL_REF_TYPE_CALL)?"green":"red",
+						fcnr_name, fcnr->addr);
+				r_cons_printf ("  \"0x%08"PFMT64x"\" "
+						"[label=\"%s\""
+						" URL=\"%s/0x%08"PFMT64x"\"];\n",
+						fcnr->addr, fcnr_name,
+						fcnr_name, fcnr->addr);
+				break;
+			case R_GRAPH_FORMAT_JSON:
+				if (usenames) {
+					r_cons_printf ("%s\"%s\"", first2?",":"", fcnr_name);
 				}
-			} else {
-				if (refgraph || fcnr->type == 'C') {
+				else {
+					r_cons_printf ("%s\"0x%08"PFMT64x"\"", first2?",":"", fcnr_name);
+				}
+				break;
+			default:
+				if (refgraph || fcnr->type == R_ANAL_REF_TYPE_CALL) {
 					// TODO: avoid recreating nodes unnecessarily
 					r_cons_printf ("agn %s\n", fcni->name);
-					r_cons_printf ("agn %s\n", fr->name);
-					r_cons_printf ("age %s %s\n", fcni->name, fr->name);
+					r_cons_printf ("agn %s\n", fcnr_name);
+					r_cons_printf ("age %s %s\n", fcni->name, fcnr_name);
 				} else {
 					r_cons_printf ("# - 0x%08"PFMT64x" (%c)\n", fcnr->addr, fcnr->type);
 				}
 			}
+			if (!(flag && flag->name)) {
+				free(fcnr_name);
+			}
+			first2 = 1;
 		}
 		r_list_free (refs);
+		r_list_free (calls);
 		if (fmt == R_GRAPH_FORMAT_JSON) {
 			r_cons_printf ("]}");
 		}
@@ -2076,14 +2084,16 @@ repeat:
 	if (iteration == 0 && fmt == R_GRAPH_FORMAT_GMLFCN) {
 		iteration++;
 	}
-	if (showhdr && (fmt == R_GRAPH_FORMAT_GML || fmt == R_GRAPH_FORMAT_GMLFCN)) {
+	switch(fmt)
+	{
+	case R_GRAPH_FORMAT_GML:
+	case R_GRAPH_FORMAT_GMLFCN:
+	case R_GRAPH_FORMAT_JSON:
 		r_cons_printf ("]\n");
-	}
-	if (fmt == R_GRAPH_FORMAT_DOT) {
+		break;
+	case R_GRAPH_FORMAT_DOT:
 		r_cons_printf ("}\n");
-	}
-	if (fmt == R_GRAPH_FORMAT_JSON) {
-		r_cons_printf ("]\n");
+		break;
 	}
 }
 
@@ -2938,10 +2948,11 @@ R_API int r_core_anal_graph(RCore *core, ut64 addr, int opts) {
 	if (is_json) {
 		r_cons_printf ("[");
 	}
+
 	r_list_foreach (core->anal->fcns, iter, fcni) {
 		if (fcni->type & (R_ANAL_FCN_TYPE_SYM | R_ANAL_FCN_TYPE_FCN |
 		                  R_ANAL_FCN_TYPE_LOC) &&
-		    (addr == UT64_MAX || r_anal_fcn_in (fcni, addr))) {
+		    (addr == UT64_MAX || r_anal_get_fcn_in(core->anal, addr, R_ANAL_FCN_TYPE_ROOT) == fcni)) {
 			if (addr == UT64_MAX && (from != UT64_MAX && to != UT64_MAX)) {
 				if (fcni->addr < from || fcni->addr > to) {
 					continue;
@@ -2974,7 +2985,7 @@ R_API int r_core_anal_graph(RCore *core, ut64 addr, int opts) {
 }
 
 static int core_anal_followptr(RCore *core, int type, ut64 at, ut64 ptr, ut64 ref, int code, int depth) {
-	// SLOW Operation try to reduce as much as possible -- eprintf ("READ %d %llx\n", wordsize, ptr);
+	// SLOW Operation try to reduce as much as possible
 	if (!ptr) {
 		return false;
 	}
@@ -3292,13 +3303,13 @@ R_API int r_core_anal_search_xrefs(RCore *core, ut64 from, ut64 to, int rad) {
 		memset (block, -1, bsz);
 		if (!memcmp (buf, block, bsz)) {
 		//	eprintf ("Error: skipping uninitialized block \n");
-			at += bsz;
+			at += ret;
 			continue;
 		}
 		memset (block, 0, bsz);
 		if (!memcmp (buf, block, bsz)) {
 		//	eprintf ("Error: skipping uninitialized block \n");
-			at += bsz;
+			at += ret;
 			continue;
 		}
 		while (i < bsz && !r_cons_is_breaked ()) {

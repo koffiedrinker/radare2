@@ -547,7 +547,6 @@ R_API char *r_bin_java_unmangle_method(const char *flags, const char *name, cons
 		r_val_str = strdup ("UNKNOWN");
 	}
 	f_val_str = strdup (flags ? flags : "");
-	params_idx = 0;
 	r_list_foreach (the_list, iter, str) {
 		params_len += strlen (str);
 		if (params_idx > 0) {
@@ -559,7 +558,6 @@ R_API char *r_bin_java_unmangle_method(const char *flags, const char *name, cons
 		ut32 offset = 0;
 		params_len += 1;
 		p_val_str = malloc (params_len);
-		params_idx = 0;
 		r_list_foreach (the_list, iter, str) {
 			if (offset != 0) {
 				offset += snprintf (p_val_str + offset, params_len - offset, ", %s", str);
@@ -970,60 +968,57 @@ R_API int extract_type_value(const char *arg_str, char **output) {
 		R_FREE (*output);
 	}
 	while (arg_str && *arg_str && !found_one) {
-		len = 0;
+		len = 1;
 		// handle the end of an object
 		switch (*arg_str) {
 		case 'V':
-			len = 1;
 			str = get_type_value_str ("void", array_cnt);
 			break;
 		case 'J':
-			len = 1;
 			str = get_type_value_str ("long", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'I':
-			len = 1;
 			str = get_type_value_str ("int", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'D':
-			len = 1;
 			str = get_type_value_str ("double", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'F':
-			len = 1;
 			str = get_type_value_str ("float", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'B':
-			len = 1;
 			str = get_type_value_str ("byte", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'C':
-			len = 1;
 			str = get_type_value_str ("char", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'Z':
-			len = 1;
 			str = get_type_value_str ("boolean", array_cnt);
 			array_cnt = 0;
 			break;
 		case 'S':
-			len = 1;
 			str = get_type_value_str ("short", array_cnt);
 			array_cnt = 0;
 			break;
-		case '[': len = 1; array_cnt++; break;
+		case '[':
+			array_cnt++;
+			break;
 		case 'L':
 			len = r_bin_java_extract_reference_name (arg_str, &str, array_cnt);
 			array_cnt = 0;
 			break;
-		case '(': len = 1; str = strdup ("("); break;
-		case ')': len = 1; str = strdup (")"); break;
+		case '(':
+			str = strdup ("(");
+			break;
+		case ')':
+			str = strdup (")");
+			break;
 		default:
 			return 0;
 		}
@@ -1540,6 +1535,7 @@ R_API RBinJavaField *r_bin_java_read_next_field(RBinJavaObj *bin, const ut64 off
 			adv += attr->size;
 			if (adv + offset >= len) {
 				eprintf ("[X] r_bin_java: Error unable to parse remainder of classfile after Field Attribute: %d.\n", i);
+				r_bin_java_fmtype_free (field);
 				return NULL;
 			}
 		}
@@ -3737,6 +3733,7 @@ R_API RBinJavaAttrInfo *r_bin_java_inner_classes_attr_new(ut8 *buffer, ut64 sz, 
 			if (!icattr->name) {
 				icattr->name = r_str_dup (NULL, "NULL");
 				eprintf ("r_bin_java_inner_classes_attr: Unable to find the name for %d index.\n", icattr->inner_name_idx);
+				free (icattr);
 				break;
 			}
 		}
@@ -4160,7 +4157,7 @@ R_API RBinJavaStackMapFrameMetas *r_bin_java_determine_stack_frame_type(ut8 tag)
 	ut8 type_value = 0;
 	if (tag < 64) {
 		type_value = R_BIN_JAVA_STACK_FRAME_SAME;
-	} else if (63 < tag && tag < 128) {
+	} else if (tag < 128) {
 		type_value = R_BIN_JAVA_STACK_FRAME_SAME_LOCALS_1;
 	} else if (247 < tag && tag < 251) {
 		type_value = R_BIN_JAVA_STACK_FRAME_CHOP;
@@ -6714,7 +6711,6 @@ R_API RBinJavaElementValue *r_bin_java_element_value_new(ut8 *buffer, ut64 sz, u
 		// (ut16) read and set const_value.const_value_idx
 		element_value->value.const_value.const_value_idx = R_BIN_JAVA_USHORT (buffer, offset);
 		element_value->size += 2;
-		offset += 2;
 		// look-up, deep copy, and set const_value.const_value_cp_obj
 		element_value->value.const_value.const_value_cp_obj = r_bin_java_clone_cp_idx (R_BIN_JAVA_GLOBAL_BIN, element_value->value.const_value.const_value_idx);
 		break;
@@ -8406,6 +8402,8 @@ R_API char *r_bin_java_resolve_b64_encode(RBinJavaObj *BIN_OBJ, ut16 idx) {
 			r_base64_encode (out, (const ut8 *) str, strlen (str));
 			free (str);
 			str = out;
+		} else {
+			free (out);
 		}
 	} else if (strcmp (cp_name, "Float") == 0) {
 		str = malloc (34);
@@ -8515,13 +8513,11 @@ R_API ConstJavaValue *U(r_bin_java_resolve_to_const_value)(RBinJavaObj * BIN_OBJ
 		return result;
 	}
 	item = (RBinJavaCPTypeObj *) r_bin_java_get_item_from_bin_cp_list (BIN_OBJ, idx);
-	if (item) {
-		cp_name = ((RBinJavaCPTypeMetas *) item->metas->type_info)->name;
-		IFDBG eprintf("java_resolve Resolved: (%d) %s\n", idx, cp_name);
-	} else {
+	if (!item) {
 		return result;
 	}
 	cp_name = ((RBinJavaCPTypeMetas *) item->metas->type_info)->name;
+	IFDBG eprintf("java_resolve Resolved: (%d) %s\n", idx, cp_name);
 	if (strcmp (cp_name, "Class") == 0) {
 		item2 = (RBinJavaCPTypeObj *) r_bin_java_get_item_from_bin_cp_list (BIN_OBJ, idx);
 		// str = r_bin_java_get_name_from_bin_cp_list (BIN_OBJ, idx-1);

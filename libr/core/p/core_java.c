@@ -726,7 +726,7 @@ static int r_cmd_is_object_descriptor (const char *name, ut32 name_len) {
 		}
 	}
 
-	for (idx = 0, L_pos = 0; idx < name_len; idx++,p_name++) {
+	for (idx = 0, Semi_pos = 0; idx < name_len; idx++,p_name++) {
 		if (*p_name == ';') {
 			found_Semi = true;
 			Semi_pos = idx;
@@ -1497,7 +1497,7 @@ static int r_cmd_java_call(void *user, const char *input) {
 		}
 	}
 	if (!res) {
-		res = r_cmd_java_handle_help (core, input);
+		return r_cmd_java_handle_help (core, input);
 	}
 	return true;
 }
@@ -1735,6 +1735,10 @@ static int r_cmd_java_set_acc_flags (RCore *core, ut64 addr, ut16 num_acc_flag) 
 	//ut64 cur_offset = core->offset;
 	num_acc_flag = R_BIN_JAVA_USHORT (((ut8*) &num_acc_flag), 0);
 	res = r_core_write_at(core, addr, (const ut8 *)&num_acc_flag, 2);
+	if (!res) {
+		eprintf ("[X] r_cmd_java_set_acc_flags: Failed to write.\n");
+		return res;
+	}
 	//snprintf (cmd_buf, 50, fmt, num_acc_flag, addr);
 	//res = r_core_cmd0(core, cmd_buf);
 	res = true;

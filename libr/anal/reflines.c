@@ -374,6 +374,21 @@ static void fill_level(RBuffer *b, int pos, char ch, RAnalRefline *r, int wide) 
 	}
 }
 
+static inline bool refline_kept(RAnalRefline *ref, bool middle_after, ut64 addr) {
+	if (middle_after) {
+		if (ref->direction < 0) {
+			if (ref->from == addr) {
+				return false;
+			}
+		} else {
+			if (ref->to == addr) {
+				return false;
+			}
+		}
+	}
+	return true;
+}
+
 // TODO: move into another file
 // TODO: this is TOO SLOW. do not iterate over all reflines or gtfo
 R_API char* r_anal_reflines_str(void *_core, ut64 addr, int opts) {
@@ -387,6 +402,7 @@ R_API char* r_anal_reflines_str(void *_core, ut64 addr, int opts) {
 	int dir = 0, wide = opts & R_ANAL_REFLINE_TYPE_WIDE;
 	int pos = -1, max_level = -1;
 	int middle = opts & R_ANAL_REFLINE_TYPE_MIDDLE;
+	int middle_after = opts & R_ANAL_REFLINE_TYPE_MIDDLE_AFTER;
 	char *str = NULL;
 
 	if (!c || !anal || !anal->reflines) {
@@ -402,7 +418,7 @@ R_API char* r_anal_reflines_str(void *_core, ut64 addr, int opts) {
 			r_list_free (lvls);
 			return NULL;
 		}
-		if (in_refline (addr, ref)) {
+		if (in_refline (addr, ref) && refline_kept (ref, middle_after, addr)) {
 			r_list_add_sorted (lvls, (void *)ref, (RListComparator)cmp_by_ref_lvl);
 		}
 	}
@@ -414,7 +430,7 @@ R_API char* r_anal_reflines_str(void *_core, ut64 addr, int opts) {
 			r_buf_free (b);
 			return NULL;
 		}
-		if (ref->from == addr || ref->to == addr) {
+		if ((ref->from == addr || ref->to == addr) && !middle_after) {
 			const char *corner = get_corner_char (ref, addr, middle);
 			const char ch = ref->from == addr ? '=' : '-';
 
